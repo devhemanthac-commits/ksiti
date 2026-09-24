@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: ksiti_db
+    environment:
+      POSTGRES_USER: ksiti_admin
+      POSTGRES_PASSWORD: ksiti_secure_2026
+      POSTGRES_DB: ksiti_cadastre
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    container_name: ksiti_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: ksiti_api
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=ksiti_admin
+      - POSTGRES_PASSWORD=ksiti_secure_2026
+      - POSTGRES_DB=ksiti_cadastre
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./uploads:/app/uploads
+      - ./yolov8n.pt:/app/yolov8n.pt
+      - ./yolov8s.pt:/app/yolov8s.pt
+    restart: unless-stopped
+
+  worker:
+    build: .
+    container_name: ksiti_worker
+    command: celery -A app.worker.celery_app worker --loglevel=info -P threads
+    depends_on:
+      - db
+      - redis
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=ksiti_admin
+      - POSTGRES_PASSWORD=ksiti_secure_2026
+      - POSTGRES_DB=ksiti_cadastre
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./uploads:/app/uploads
+      - ./yolov8n.pt:/app/yolov8n.pt
+      - ./yolov8s.pt:/app/yolov8s.pt
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
