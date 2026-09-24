@@ -93,6 +93,17 @@ def upload_deed(
         file_path = str(UPLOAD_DIR / filename)
         with open(file_path, "wb") as buf:
             shutil.copyfileobj(file.file, buf)
+            
+        # 2.5 Security: Malware/MIME Scan
+        from app.agents.malware_scanner import scan_for_malware
+        if not scan_for_malware(file_path):
+            responses.append(UploadResponse(
+                tracking_id=tracking_id,
+                raw_document_sha256="REJECTED",
+                status="REJECTED",
+                message="File rejected by Malware Scanner due to invalid MIME signature."
+            ))
+            continue
     
         # 3. Cryptographic chain-of-custody lock
         raw_sha256 = _sha256_of_file(file_path)
@@ -181,6 +192,70 @@ def get_document_status(tracking_id: str, db: Session = Depends(get_db)):
         fraud_flags=record.fraud_flags,
         message=f"Document is currently: {record.status}",
     )
+
+
+@router.get("/document/{tracking_id}/pdf")
+def get_document_pdf(tracking_id: str, db: Session = Depends(get_db)):
+    """
+    Generate and serve a PDF report for the verified document.
+    """
+    record = crud.get_record(db, tracking_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    from fpdf import FPDF
+    import tempfile
+    
+    # Create a beautifully formatted PDF report
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", "B", 16)
+    
+    # Title
+    pdf.cell(0, 10, "KSITI - Cadastral Verification Report", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(5)
+    
+    # Tracking ID
+    pdf.set_font("helvetica", "", 12)
+    pdf.cell(0, 10, f"Tracking ID: {record.tracking_id}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, f"Original File: {record.original_filename}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, f"Status: {record.status}", new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.ln(5)
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "Verification Metrics:", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 12)
+    
+    pdf.cell(0, 10, f"- CIS Score (Integrity): {record.cis_score}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, f"- Routing: {record.routing}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, f"- Fraud Detected: {record.fraud_detected}", new_x="LMARGIN", new_y="NEXT")
+    
+    if record.fraud_flags:
+        pdf.cell(0, 10, f"- Fraud Flags: {record.fraud_flags}", new_x="LMARGIN", new_y="NEXT")
+        
+    pdf.ln(5)
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "The Three Layers of Truth:", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 12)
+    
+    pdf.cell(0, 10, f"1. Source Area Claimed: {record.source_area_claim}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, f"2. AI Extracted Area: {record.extracted_area}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, f"3. GIS Calculated Area: {record.gis_area}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, f"   Variance Delta: {record.variance_delta} ({record.variance_percentage}%)", new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.ln(5)
+    pdf.set_font("helvetica", "B", 14)
+    pdf.cell(0, 10, "Cryptographic Signatures:", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 10)
+    pdf.cell(0, 10, f"Raw Doc SHA-256: {record.raw_document_sha256}", new_x="LMARGIN", new_y="NEXT")
+    
+    # Output to temp file
+    temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    pdf.output(temp_pdf.name)
+    
+    return FileResponse(temp_pdf.name, media_type="application/pdf", filename=f"KSITI_Report_{tracking_id}.pdf")
+
+
 
 
 @router.get("/documents")
